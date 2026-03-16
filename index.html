@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Registrasi Wajah Cerdas</title>
+  <style>
+    /* ... (Gunakan CSS persis sama seperti kode HTML sebelumnya) ... */
+    body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: auto; text-align: center; background-color: #f4f6f9; }
+    .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    select { width: 100%; padding: 12px; margin: 15px 0; border: 1px solid #ced4da; border-radius: 5px; font-size: 16px; }
+    button { padding: 14px 20px; background-color: #0d6efd; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; }
+    button:disabled { background-color: #cccccc; cursor: not-allowed; }
+    #videoContainer { position: relative; margin-top: 20px; width: 100%; display: none; }
+    video, canvas { width: 100%; border-radius: 8px; transform: scaleX(-1); }
+    canvas { position: absolute; top: 0; left: 0; }
+    .alert { margin-top: 15px; padding: 12px; border-radius: 5px; font-weight: bold; text-align: left; font-size: 0.9em; }
+    .alert-info { background-color: #cff4fc; color: #055160; }
+    .alert-warning { background-color: #fff3cd; color: #856404; }
+    .alert-success { background-color: #d1e7dd; color: #0f5132; }
+    .alert-danger { background-color: #f8d7da; color: #842029; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+</head>
+<body>
+
+  <div class="card">
+    <h2>Pendaftaran Wajah</h2>
+    <select id="pilihPegawai"><option value="" disabled selected>Memuat data...</option></select>
+    <button id="btnMulai" disabled onclick="mulaiProses()">Menyiapkan Sistem...</button>
+    <div id="videoContainer"><video id="video" autoplay muted playsinline></video></div>
+    <div id="status" class="alert alert-info">Memulai sistem...<br></div>
+  </div>
+
+  <script>
+    // MASUKKAN URL DEPLOYMENT APPS SCRIPT ANDA DI SINI
+    const API_URL = "https://script.google.com/macros/s/AKfycbxDe6QiGX3Tt3YzRlF8dVHqxl_0PjmlzxaR0Y71Kj2UCrIkItLd03gqyAeUOdptf1-utA/exec"; 
+
+    const selectPegawai = document.getElementById('pilihPegawai');
+    const video = document.getElementById('video');
+    const statusDiv = document.getElementById('status');
+    const btnMulai = document.getElementById('btnMulai');
+    const container = document.getElementById('videoContainer');
+    
+    let isProcessing = false, livenessLoop, dataLoaded = false, aiLoaded = false;
+
+    window.onload = async () => {
+      statusDiv.innerHTML += "⏳ Memuat data...<br>";
+      
+      // Mengambil data dari Apps Script menggunakan Fetch API
+      try {
+        let response = await fetch(API_URL, {
+          method: 'POST',
+          body: JSON.stringify({ action: "getDaftarPegawai" })
+        });
+        let result = await response.json();
+        
+        if (result.status === 'success') {
+          statusDiv.innerHTML += "✅ Data Sheets dimuat.<br>";
+          populateDropdown(result.data);
+        } else {
+          throw new Error(result.message);
+        }
+      } catch (error) {
+        statusDiv.className = 'alert alert-danger';
+        statusDiv.innerHTML += "<b>❌ ERROR SHEETS:</b> " + error.message + "<br>";
+      }
+        
+      loadAIModels();
+    };
+
+    function populateDropdown(listPegawai) {
+      selectPegawai.innerHTML = '<option value="" disabled selected>-- Pilih Nama Anda --</option>';
+      listPegawai.forEach(pegawai => {
+        const option = document.createElement('option');
+        option.value = pegawai.nip;
+        option.text = pegawai.terdaftar ? `[SUDAH DAFTAR] ${pegawai.nama}` : `${pegawai.nama} - ${pegawai.nip}`;
+        if (pegawai.terdaftar) { option.disabled = true; option.style.color = "red"; }
+        selectPegawai.appendChild(option);
+      });
+      dataLoaded = true; cekKesiapan();
+    }
+
+    function loadAIModels() {
+      const MODEL_URL = 'https://vladmandic.github.io/face-api/model/';
+      Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+      ]).then(() => {
+        statusDiv.innerHTML += "✅ Model AI diunduh.<br>";
+        aiLoaded = true; cekKesiapan();
+      }).catch(err => {
+        statusDiv.className = 'alert alert-danger';
+        statusDiv.innerHTML += "<b>❌ ERROR AI:</b> " + err.message + "<br>";
+      });
+    }
+
+    function cekKesiapan() {
+      if (dataLoaded && aiLoaded) {
+        setTimeout(() => { statusDiv.style.display = 'none'; }, 1500); 
+        btnMulai.innerText = "Mulai Pemindaian"; btnMulai.disabled = false;
+      }
+    }
+
+    // Liveness Detection (Sama persis)
+    function getDistance(p1, p2) { return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2)); }
+    function calculateEAR(eye) { return (getDistance(eye[1], eye[5]) + getDistance(eye[2], eye[4])) / (2.0 * getDistance(eye[0], eye[3])); }
+
+    function mulaiProses() {
+      const nip = selectPegawai.value;
+      if(!nip) return alert("Pilih nama Anda!");
+      selectPegawai.disabled = true; btnMulai.style.display = 'none';
+      statusDiv.style.display = 'block'; statusDiv.className = 'alert alert-info';
+      statusDiv.innerHTML = "Mengakses kamera...";
+      
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+        .then(stream => {
+          video.srcObject = stream; container.style.display = "block";
+          video.onplaying = () => mulaiLivenessCheck(nip);
+        }).catch(err => {
+          statusDiv.className = 'alert alert-danger'; statusDiv.innerHTML = "Akses kamera ditolak.";
+        });
+    }
+
+    function mulaiLivenessCheck(nip) {
+      statusDiv.className = 'alert alert-warning';
+      statusDiv.innerHTML = "Wajah terdeteksi.<br><b>SILAKAN BERKEDIP!</b>";
+      livenessLoop = setInterval(async () => {
+        if(isProcessing) return;
+        const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+        if (detection) {
+          const avgEAR = (calculateEAR(detection.landmarks.getLeftEye()) + calculateEAR(detection.landmarks.getRightEye())) / 2;
+          if (avgEAR < 0.25) { 
+            isProcessing = true; clearInterval(livenessLoop);
+            statusDiv.className = 'alert alert-success'; statusDiv.innerHTML = "Menyimpan data...";
+            simpanKeDatabase(nip, Array.from(detection.descriptor));
+          }
+        }
+      }, 150);
+    }
+
+    // Mengirim data ke Apps Script via Fetch
+    async function simpanKeDatabase(nip, descriptorArray) {
+      try {
+        let response = await fetch(API_URL, {
+          method: 'POST',
+          body: JSON.stringify({ action: "simpanRegistrasi", nip: nip, descriptor: descriptorArray })
+        });
+        let result = await response.json();
+        
+        if(result.status === 'success') {
+          statusDiv.className = 'alert alert-success'; statusDiv.innerHTML = "<b>SELESAI!</b> Anda sudah terdaftar.";
+          video.srcObject.getTracks().forEach(track => track.stop());
+        } else {
+          statusDiv.className = 'alert alert-warning'; statusDiv.innerHTML = "<b>GAGAL:</b> " + result.message;
+        }
+      } catch (error) {
+        statusDiv.className = 'alert alert-danger'; statusDiv.innerHTML = "<b>GAGAL KONEKSI.</b>";
+      }
+    }
+  </script>
+</body>
+</html>
