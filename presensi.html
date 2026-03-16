@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Presensi Apel & Senam</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: auto; text-align: center; background-color: #f8f9fa; }
+    .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    #videoContainer { position: relative; margin-top: 20px; width: 100%; display: none; }
+    video, canvas { width: 100%; border-radius: 8px; transform: scaleX(-1); }
+    canvas { position: absolute; top: 0; left: 0; }
+    .alert { margin-top: 15px; padding: 12px; border-radius: 5px; font-weight: bold; text-align: left; font-size: 0.9em;}
+    .alert-info { background-color: #cff4fc; color: #055160; border: 1px solid #b6effb; }
+    .alert-success { background-color: #d1e7dd; color: #0f5132; border: 1px solid #badbcc; }
+    .alert-warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+    .alert-danger { background-color: #f8d7da; color: #842029; border: 1px solid #f5c2c7; }
+    button { padding: 14px 20px; background-color: #198754; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; margin-top: 15px; transition: 0.3s;}
+    button:disabled { background-color: #cccccc; cursor: not-allowed; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.min.js"></script>
+</head>
+<body>
+
+  <div class="card">
+    <h2>Sistem Presensi Hadir</h2>
+    <p style="font-size: 0.9em; color: #6c757d;">Arahkan wajah ke kamera dan berkedip untuk absen.</p>
+    <div id="status" class="alert alert-info">Memulai sistem presensi...<br></div>
+    <button id="btnMulai" disabled onclick="mulaiPresensi()">Mulai Kamera Absen</button>
+    <div id="videoContainer"><video id="video" autoplay muted playsinline></video></div>
+  </div>
+
+  <script>
+    // --- RADAR PENANGKAP ERROR (Menampilkan error tersembunyi ke layar) ---
+    window.onerror = function(msg, url, line) {
+      const statusDiv = document.getElementById('status');
+      statusDiv.className = 'alert alert-danger';
+      statusDiv.innerHTML = "<b>❌ CRASH KODE BARIS " + line + ":</b><br>" + msg;
+    };
+    window.onunhandledrejection = function(e) {
+      const statusDiv = document.getElementById('status');
+      statusDiv.className = 'alert alert-danger';
+      statusDiv.innerHTML = "<b>❌ KONEKSI DITOLAK:</b><br>" + (e.reason.message || e.reason);
+    };
+
+    // =========================================================================
+    // MASUKKAN URL DEPLOYMENT APPS SCRIPT ANDA DI BAWAH INI
+    // Pastikan tanda kutip (" ") di awal dan akhir URL tidak terhapus!
+    // =========================================================================
+    const API_URL = "https://script.google.com/macros/s/AKfycbxDe6QiGX3Tt3YzRlF8dVHqxl_0PjmlzxaR0Y71Kj2UCrIkItLd03gqyAeUOdptf1-utA/exec"; 
+
+    const video = document.getElementById('video');
+    const statusDiv = document.getElementById('status');
+    const btnMulai = document.getElementById('btnMulai');
+    const container = document.getElementById('videoContainer');
+    
+    let faceMatcher;
+    let isProcessing = false, scanLoop;
+
+    // --- 1. PROSES AWAL: AMBIL DATA WAJAH DARI SERVER ---
+    window.onload = async () => {
+      try {
+        statusDiv.innerHTML = "⏳ Menghubungi Google Sheets...<br>";
+        
+        let response = await fetch(API_URL, {
+          method: 'POST',
+          body: JSON.stringify({ action: "getDataWajah" })
+        });
+        
+        statusDiv.innerHTML += "✅ Terhubung ke Server. Membaca data...<br>";
+        
+        let result = await response.json();
+        
+        if (result.status === 'success') {
+          if (result.data.length === 0) {
+            statusDiv.className = 'alert alert-warning';
+            statusDiv.innerHTML = "Belum ada pegawai yang teregistrasi di database.";
+            return;
+          }
+          siapkanFaceMatcher(result.data);
+        } else {
+          throw new Error(result.message); // Menangkap pesan error dari Apps Script
+        }
+      } catch (error) {
+        statusDiv.className = 'alert alert-danger';
+        statusDiv.innerHTML = "<b>❌ GAGAL TARIK DATA:</b><br>" + error.message;
+      }
+    };
+
+    // --- 2. SIAPKAN MESIN PENGENALAN WAJAH (AI) ---
+    function siapkanFaceMatcher(dataWajah) {
+      statusDiv.innerHTML += "✅ Database wajah (" + dataWajah.length + " orang) dimuat.<br>⏳ Menyiapkan AI...<br>";
+      
+      const MODEL_URL = 'https://vladmandic.github.io/face-api/model/';
+      Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+      ]).then(() => {
+        const labeledFaceDescriptors = dataWajah.map(data => {
+          const floatArray = new Float32Array(data.descriptor);
+          return new faceapi.LabeledFaceDescriptors(data.label, [floatArray]);
+        });
+
+        // Toleransi kemiripan: 0.55
+        faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors, 0.55);
+
+        statusDiv.className = 'alert alert-success';
+        statusDiv.innerHTML = "<b>Sistem Presensi Siap!</b>";
+        setTimeout(() => { statusDiv.style.display = 'none'; }, 2000); // Sembunyikan alert setelah 2 detik
+        btnMulai.disabled = false;
+      }).catch(err => {
+        statusDiv.className = 'alert alert-danger';
+        statusDiv.innerHTML += "<b>❌ GAGAL AI:</b><br>" + err.message;
+      });
+    }
+
+    // --- 3. LOGIKA KAMERA & LIVENESS (KEDIPAN) ---
+    function getDistance(p1, p2) { return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2)); }
+    function calculateEAR(eye) { return (getDistance(eye[1], eye[5]) + getDistance(eye[2], eye[4])) / (2.0 * getDistance(eye[0], eye[3])); }
+
+    function mulaiPresensi() {
+      btnMulai.style.display = 'none';
+      statusDiv.style.display = 'block';
+      statusDiv.className = 'alert alert-info';
+      statusDiv.innerHTML = "Mengakses kamera...";
+      
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
+        .then(stream => {
+          video.srcObject = stream;
+          container.style.display = "block";
+          video.onplaying = () => prosesDeteksi();
+        }).catch(err => {
+          statusDiv.className = 'alert alert-danger';
+          statusDiv.innerHTML = "<b>❌ Akses kamera ditolak.</b><br>Pastikan Anda memberikan izin kamera pada browser.";
+        });
+    }
+
+    function prosesDeteksi() {
+      statusDiv.className = 'alert alert-warning';
+      statusDiv.innerHTML = "Menganalisis wajah...<br><b>SILAKAN BERKEDIP UNTUK ABSEN</b>";
+      
+      scanLoop = setInterval(async () => {
+        if(isProcessing) return;
+
+        try {
+          const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+                                         .withFaceLandmarks()
+                                         .withFaceDescriptor();
+
+          if (detection) {
+            const avgEAR = (calculateEAR(detection.landmarks.getLeftEye()) + calculateEAR(detection.landmarks.getRightEye())) / 2;
+            
+            // Cek jika mata berkedip
+            if (avgEAR < 0.25) { 
+              isProcessing = true;
+              clearInterval(scanLoop);
+
+              // Cari kecocokan wajah dengan database
+              const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+
+              if (bestMatch.label !== 'unknown') {
+                const dataPegawai = bestMatch.label.split("||"); // Memecah NIP||Nama
+                statusDiv.className = 'alert alert-success';
+                statusDiv.innerHTML = `Wajah dikenali: <b>${dataPegawai[1]}</b>.<br>Mengirim data absen...`;
+                kirimPresensi(dataPegawai[0], dataPegawai[1]);
+              } else {
+                statusDiv.className = 'alert alert-danger';
+                statusDiv.innerHTML = "<b>❌ Wajah tidak dikenali database!</b><br>Silakan muat ulang halaman dan coba lagi.";
+                isProcessing = false; 
+              }
+            }
+          }
+        } catch (error) {
+           console.error("Error saat analisis wajah:", error);
+        }
+      }, 150);
+    }
+
+    // --- 4. KIRIM DATA KE APPS SCRIPT ---
+    async function kirimPresensi(nip, nama) {
+      try {
+        let response = await fetch(API_URL, {
+          method: 'POST',
+          body: JSON.stringify({ action: "catatPresensi", nip: nip, nama: nama })
+        });
+        let result = await response.json();
+        
+        if(result.status === 'success') {
+          statusDiv.className = 'alert alert-success';
+          statusDiv.innerHTML = `<b>PRESENSI BERHASIL!</b><br>Terima kasih, ${nama}.`;
+          video.srcObject.getTracks().forEach(track => track.stop()); // Matikan kamera
+        } else {
+          throw new Error(result.message);
+        }
+      } catch (error) {
+        statusDiv.className = 'alert alert-danger';
+        statusDiv.innerHTML = "<b>❌ GAGAL MENCATAT:</b><br>" + error.message;
+      }
+    }
+  </script>
+</body>
+</html>
